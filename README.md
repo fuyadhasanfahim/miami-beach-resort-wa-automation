@@ -232,3 +232,16 @@ errors, disconnect, and reconnect attempts.
 - Duplicate protection: repeat messages from the same person (or the `message` +
   `message_create` events firing together) can't double-queue — `pending_jobs`
   and `replied_senders` are both keyed on `instance + sender`.
+
+---
+
+## Author
+
+**Fuyad Hasan Fahim**
+
+- Website: https://fuyadhasanfahim.com
+- GitHub: https://github.com/fuyadhasanfahim
+- LinkedIn: https://www.linkedin.com/in/fuyadhasanfahim0/
+- X: https://x.com/codewithfuyad
+- Instagram: https://www.instagram.com/codewithfuyad/
+- Facebook: https://www.facebook.com/fuyad.code
