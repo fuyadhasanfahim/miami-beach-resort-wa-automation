@@ -43,6 +43,13 @@ async function startBot(ctx) {
       clientId: instanceKey,
       dataPath: path.join(instanceDir, '.wwebjs_auth'),
     }),
+    // Per-instance web-version cache. The library default is "./.wwebjs_cache/"
+    // relative to the working directory, which both instances would share and
+    // race on when run at the same time.
+    webVersionCache: {
+      type: 'local',
+      path: path.join(instanceDir, '.wwebjs_cache'),
+    },
     puppeteer: {
       headless: true,
       executablePath,
