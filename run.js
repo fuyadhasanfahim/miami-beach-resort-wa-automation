@@ -1,7 +1,5 @@
 'use strict';
 
-require('dotenv').config({ quiet: true });
-
 const { loadInstance } = require('./src/config');
 const { startBot } = require('./src/bot');
 

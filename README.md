@@ -11,31 +11,33 @@ replies once with a fixed sequence:
 5. An audio clip (sent as a voice note)
 
 **Each sender is replied to only once, ever.** If the same person messages again
-later, the bot ignores them. This is stored in MongoDB, so it survives restarts.
+later, the bot ignores them. This is saved to a local `replied.json` file per
+instance, so it survives restarts. No database, no network — just a file.
 
 Only **1-on-1 personal chats** trigger a reply (both `@c.us` and the newer
 `@lid` sender ids). Groups, channels/newsletters and status updates are ignored.
 
 You can run it for **two WhatsApp numbers** independently — each as its own
-process with its own session folder and its own config. Each number keeps a
-separate "already replied" list.
+process with its own session folder, its own config, and its own
+`replied.json`.
 
 ### How incoming messages are handled
 
-1. A first-time sender is added to a **MongoDB job queue** (`pending_jobs`).
-2. A single worker drains the queue **one sender at a time** (never in parallel),
-   so 2 or 200 people messaging at once are served in order without hammering
-   WhatsApp Web or the browser.
-3. For each sender the worker sends the full sequence, retrying each individual
-   send up to 3 times (2s → 4s → 8s backoff), and remembering how far it got so
-   a retry resumes instead of re-sending.
-4. On success the sender moves to `replied_senders` and the job is removed.
-5. After each sender the worker waits `inter_contact_gap_ms` (default 3s) before
-   the next one.
+1. A first-time sender is put on an in-memory queue.
+2. A small worker pool processes up to `concurrency` senders **at the same time**
+   (default 3). Each sender still gets their own items in order
+   (text → link → images → video → audio); the pool just means 3 different
+   people can be served in parallel instead of one-at-a-time.
+3. Each individual send is retried up to `send_retry_attempts` times
+   (2s → 4s → 8s backoff).
+4. When a sender's whole sequence succeeds, they're written to `replied.json`.
+5. If a sequence fails outright (after retries), the sender is **not** marked —
+   they'll get the sequence on their next message (they may see a repeat of the
+   first few items).
 
-Because the queue lives in MongoDB, a crash/restart resumes cleanly: jobs left
-mid-flight are picked up again (a sender may see a couple of repeated messages in
-that rare case, but always gets the full sequence).
+The queue is in memory. If the process is killed while people are still waiting,
+those waiting senders are dropped — but since they were never marked replied,
+they get served when they message again.
 
 ---
 
@@ -44,7 +46,6 @@ that rare case, but always gets the full sequence).
 ```
 wa-automation/
 ├─ package.json
-├─ .env                       # DATABASE_URL (MongoDB connection string)
 ├─ setup.sh                   # one-command setup (Linux / macOS / Git Bash / WSL)
 ├─ setup.ps1                  # one-command setup (native Windows PowerShell)
 ├─ run.js                     # entry point: node run.js <instance>
@@ -56,9 +57,9 @@ wa-automation/
 ├─ src/
 │  ├─ bot.js                  # client setup + event handlers (shared)
 │  ├─ config.js               # loads an instance's config.json
-│  ├─ store.js                # MongoDB: replied_senders + pending_jobs queue
-│  ├─ worker.js               # drains the queue, one sender at a time
-│  ├─ replySequence.js        # sends text -> link -> images -> video -> audio (with retry/resume)
+│  ├─ repliedStore.js         # local replied.json — who has been contacted
+│  ├─ dispatcher.js           # concurrency pool (N senders in parallel)
+│  ├─ replySequence.js        # sends text -> link -> images -> video -> audio (with retry)
 │  └─ logger.js               # timestamped, instance-tagged logging
 ├─ assets/                    # shared media, used by both numbers
 │  ├─ message.txt             # the preset reply text
@@ -70,9 +71,11 @@ wa-automation/
 └─ instances/
    ├─ number1/
    │  ├─ config.json          # config for WhatsApp number 1
+   │  ├─ replied.json         # auto-created; who has already been replied to
    │  └─ .wwebjs_auth/        # session (auto-created after first QR scan)
    └─ number2/
       ├─ config.json
+      ├─ replied.json
       └─ .wwebjs_auth/
 ```
 
@@ -82,21 +85,16 @@ wa-automation/
 
 - A machine that can run headless Chromium. whatsapp-web.js downloads its own
   Chromium via Puppeteer during setup.
-- A **MongoDB** database. The connection string goes in `.env` as `DATABASE_URL`.
 - Node.js 18+ — **or nothing**: the setup script installs a local copy if you
   don't have it.
+
+(No database required.)
 
 ---
 
 ## One-command setup
 
-Create `.env` in the project root first:
-
-```
-DATABASE_URL="mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/wa-automation?appName=Cluster0"
-```
-
-Then run the setup script for your OS:
+Run the setup script for your OS:
 
 | OS | Command |
 |----|---------|
@@ -112,12 +110,7 @@ The setup script:
    (no admin rights, nothing installed system-wide).
 3. Runs `npm install`.
 4. Downloads the Chromium build WhatsApp Web needs.
-5. Checks that `.env` has `DATABASE_URL`.
-6. Makes the start scripts executable.
-
-The bot uses two MongoDB collections, created automatically:
-`replied_senders` (who has already received the sequence) and `pending_jobs`
-(the live queue).
+5. Makes the start scripts executable.
 
 If you already have Node.js and just want dependencies: `npm install`.
 
@@ -138,11 +131,10 @@ Edit `instances/number1/config.json` (and `instances/number2/config.json`):
 | `images`          | Ordered list of image paths to send.                                  |
 | `video_path`      | Video file to send.                                                   |
 | `audio_path`      | Audio file — sent as a voice note.                                    |
-| `send_delay_ms`   | Pause between each send inside one sequence (default `1000`).          |
-| `inter_contact_gap_ms` | Pause after finishing one sender before starting the next (default `3000`). |
+| `concurrency`     | How many different senders to serve in parallel (default `3`). Raise to 4–5 for faster clearing of a burst; if you start seeing send errors, lower it. |
+| `send_delay_ms`   | Pause between each send inside one sequence (default `1000`). Lower (e.g. `700`) to make each sequence faster. |
 | `send_retry_attempts` | Times to try each individual send before failing it (default `3`). |
 | `send_retry_base_ms`  | First retry backoff; doubles each time — 2s, 4s, 8s (default `2000`). |
-| `max_job_attempts`    | Times to re-attempt a whole sequence across retries before giving up and marking the sender replied (default `3`). |
 | `executable_path` | *(optional)* Path to a specific Chrome/Chromium binary.               |
 
 Both numbers currently use the **same shared content** from `assets/`. To give a
@@ -175,7 +167,7 @@ Scan this QR with the phone holding **number 2**.
 After the first scan, the session is saved in that instance's `.wwebjs_auth/`
 folder — subsequent starts connect automatically without a QR.
 
-When you see `Client is ready. Waiting for incoming messages...`, message the bot
+When you see `Client is ready. ... Waiting for messages...`, message the bot
 number from another phone. The first message gets the full sequence; anything
 after that is ignored.
 
@@ -183,17 +175,10 @@ after that is ignored.
 
 ## Resetting
 
-- **Let everyone get the sequence again (one number):** remove that number's
-  entries from MongoDB:
-  ```
-  db.replied_senders.deleteMany({ instance: "number1" })
-  db.pending_jobs.deleteMany({ instance: "number1" })
-  ```
-- **Re-send to one person:** delete just their rows:
-  ```
-  db.replied_senders.deleteMany({ instance: "number1", sender: "<id>@c.us" })
-  db.pending_jobs.deleteMany({ instance: "number1", sender: "<id>@c.us" })
-  ```
+- **Let everyone get the sequence again (one number):** stop the bot, delete
+  `instances/number1/replied.json`, start again.
+- **Re-send to one person:** stop the bot, open `instances/number1/replied.json`
+  (a JSON array of ids), remove that person's id, save, start again.
 - **Force a fresh QR / log out a number:** delete that instance's
   `.wwebjs_auth/` folder, then restart.
 - **"The browser is already running for ...":** a previous run's Chromium didn't
@@ -205,10 +190,10 @@ after that is ignored.
 ## Logs
 
 Every line is timestamped and tagged with the instance name. You'll see log
-lines for: database connected, QR shown, authenticated, ready, each inbound
-message (`Inbound (...) from=... type=... body="..."`), why a message was skipped,
-`Queued ...`, `Queue: processing ...`, each item sent, retries, `Queue: finished`,
-errors, disconnect, and reconnect attempts.
+lines for: QR shown, authenticated, ready, each inbound message
+(`Inbound (...) from=... type=... body="..."`), why a message was skipped,
+`Queued ... (active X/N, waiting Y)`, `Processing ...`, each item sent, retries,
+`Done ...`, failures, disconnect, and reconnect attempts.
 
 ---
 
@@ -226,12 +211,13 @@ errors, disconnect, and reconnect attempts.
   pm2 start run.js --name wa-number2 -- number2
   pm2 save
   ```
-- Concurrency: many people messaging at once is fine — everyone is queued and
-  served one at a time. The trade-off is latency: with N people waiting, the
-  last one waits roughly `N × (sequence time + inter_contact_gap_ms)`.
+- Throughput vs. safety: `concurrency` and `send_delay_ms` are the two knobs.
+  Higher concurrency / lower delay clears a burst faster but pushes WhatsApp Web
+  and the single browser page harder. Start at `concurrency: 3`,
+  `send_delay_ms: 1000` and adjust while watching the logs for send errors.
 - Duplicate protection: repeat messages from the same person (or the `message` +
-  `message_create` events firing together) can't double-queue — `pending_jobs`
-  and `replied_senders` are both keyed on `instance + sender`.
+  `message_create` events firing together) are ignored while that sender is
+  queued / in progress, and afterwards via `replied.json`.
 
 ---
 

@@ -10,11 +10,17 @@ function buildActions({ config, resolveAsset, log }) {
   const actions = [];
 
   if (config.reply_text && config.reply_text.trim()) {
-    actions.push({ label: 'text message', run: (t) => t.sendMessage(config.reply_text) });
+    actions.push({
+      label: 'text message',
+      run: (t) => t.sendMessage(config.reply_text, { linkPreview: false }),
+    });
   }
 
   if (config.reply_link && config.reply_link.trim()) {
-    actions.push({ label: 'link', run: (t) => t.sendMessage(config.reply_link.trim()) });
+    actions.push({
+      label: 'link',
+      run: (t) => t.sendMessage(config.reply_link.trim(), { linkPreview: false }),
+    });
   }
 
   const media = [];
@@ -61,7 +67,7 @@ async function withRetry(fn, { attempts, baseMs, label, log }) {
   throw lastErr;
 }
 
-async function runReplySequence({ target, ctx, log, startAt = 0, onProgress }) {
+async function runReplySequence({ target, ctx, log }) {
   const { config, resolveAsset } = ctx;
   const gap = Number.isFinite(config.send_delay_ms) ? config.send_delay_ms : 1000;
   const attempts = Number.isFinite(config.send_retry_attempts) ? config.send_retry_attempts : 3;
@@ -69,11 +75,10 @@ async function runReplySequence({ target, ctx, log, startAt = 0, onProgress }) {
 
   const actions = buildActions({ config, resolveAsset, log });
 
-  for (let i = startAt; i < actions.length; i++) {
+  for (let i = 0; i < actions.length; i++) {
     const action = actions[i];
     await withRetry(() => action.run(target), { attempts, baseMs, label: action.label, log });
     log(`  sent ${action.label}`);
-    if (onProgress) await onProgress(i + 1);
     if (i < actions.length - 1) await wait(gap);
   }
 }

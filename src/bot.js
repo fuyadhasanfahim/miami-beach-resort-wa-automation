@@ -5,8 +5,9 @@ const qrcode = require('qrcode-terminal');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 
 const { makeLogger } = require('./logger');
-const { createStore } = require('./store');
-const { startWorker } = require('./worker');
+const { createRepliedStore } = require('./repliedStore');
+const { createDispatcher } = require('./dispatcher');
+const { runReplySequence } = require('./replySequence');
 
 const IGNORED_TYPES = new Set([
   'e2e_notification',
@@ -27,15 +28,12 @@ async function startBot(ctx) {
   const name = config.instance_name || instanceKey;
   const log = makeLogger(name);
 
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    log('DATABASE_URL is not set. Add it to .env before starting.');
-    process.exit(1);
-  }
+  const replied = createRepliedStore(path.join(instanceDir, 'replied.json'));
+  log(`Loaded reply history: ${replied.size()} sender(s) already contacted.`);
 
-  log('Connecting to database...');
-  const store = await createStore({ databaseUrl, instanceKey });
-  log(`Database connected. ${await store.repliedCount()} replied, ${await store.pendingCount()} in queue.`);
+  // Senders currently queued or being processed — stops the same person being
+  // handled twice (repeat messages, or the message + message_create events).
+  const inFlight = new Set();
 
   const executablePath =
     config.executable_path || process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
@@ -54,8 +52,33 @@ async function startBot(ctx) {
 
   if (executablePath) log(`Using browser: ${executablePath}`);
 
-  let ready = false;
-  let worker = null;
+  async function resolveTarget(chatId) {
+    try {
+      return await client.getChatById(chatId);
+    } catch (_) {
+      return { sendMessage: (content, opts) => client.sendMessage(chatId, content, opts) };
+    }
+  }
+
+  const dispatcher = createDispatcher({
+    concurrency: config.concurrency,
+    log,
+    processFn: async ({ senderId, chatId }) => {
+      const s = dispatcher.stats();
+      log(`Processing ${senderId} (active ${s.active}/${s.concurrency}, waiting ${s.pending}).`);
+      try {
+        const target = await resolveTarget(chatId);
+        await runReplySequence({ target, ctx, log });
+        replied.add(senderId);
+        log(`Done ${senderId}.`);
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        log(`Failed ${senderId}: ${msg}. Not marked as replied — they'll be retried on their next message.`);
+      } finally {
+        inFlight.delete(senderId);
+      }
+    },
+  });
 
   client.on('qr', (qr) => {
     log('Scan this QR in WhatsApp > Linked devices:');
@@ -75,11 +98,7 @@ async function startBot(ctx) {
   });
 
   client.on('ready', () => {
-    ready = true;
-    log('Client is ready. Waiting for incoming messages...');
-    if (!worker) {
-      worker = startWorker({ store, client, ctx, log, isReady: () => ready });
-    }
+    log(`Client is ready. Concurrency = ${dispatcher.stats().concurrency}. Waiting for messages...`);
   });
 
   async function handleIncoming(message, source) {
@@ -95,6 +114,15 @@ async function startBot(ctx) {
       return;
     }
 
+    if (replied.has(senderId)) {
+      log(`${senderId} already replied once before. Ignoring.`);
+      return;
+    }
+    if (inFlight.has(senderId)) {
+      log(`${senderId} already queued / in progress. Ignoring.`);
+      return;
+    }
+
     let chat;
     try {
       chat = await message.getChat();
@@ -106,28 +134,20 @@ async function startBot(ctx) {
       return;
     }
 
-    const chatId = chat && chat.id ? chat.id._serialized : senderId;
+    // Re-check after the await above, then claim the sender atomically.
+    if (replied.has(senderId) || inFlight.has(senderId)) return;
+    inFlight.add(senderId);
 
-    try {
-      const result = await store.enqueue({ sender: senderId, chatId });
-      if (result === 'queued') {
-        log(`Queued ${senderId}. ${await store.pendingCount()} in queue.`);
-      } else if (result === 'already_replied') {
-        log(`${senderId} already replied once before. Ignoring.`);
-      } else {
-        log(`${senderId} already in queue. Ignoring.`);
-      }
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
-      log(`Error queueing message from ${senderId}: ${msg}`);
-    }
+    const chatId = chat && chat.id ? chat.id._serialized : senderId;
+    dispatcher.enqueue({ senderId, chatId });
+    const s = dispatcher.stats();
+    log(`Queued ${senderId} (active ${s.active}/${s.concurrency}, waiting ${s.pending}).`);
   }
 
   client.on('message', (m) => handleIncoming(m, 'message'));
   client.on('message_create', (m) => handleIncoming(m, 'message_create'));
 
   client.on('disconnected', (reason) => {
-    ready = false;
     log(`Disconnected (${reason}). Re-initializing in 5s...`);
     setTimeout(() => {
       log('Re-initializing client now.');
@@ -142,8 +162,6 @@ async function startBot(ctx) {
   async function shutdown(signal) {
     log(`${signal} received. Shutting down...`);
     try {
-      if (worker) await worker.stop();
-      await store.close();
       await client.destroy();
     } catch (_) {
       /* best effort */

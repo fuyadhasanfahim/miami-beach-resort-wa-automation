@@ -119,15 +119,6 @@ if [ "$OS" = linux ]; then
   warn "  sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2"
 fi
 
-if [ ! -f .env ]; then
-  warn ".env not found. Create it in the project root:"
-  warn '  DATABASE_URL="mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/wa-automation?appName=Cluster0"'
-elif ! grep -q '^DATABASE_URL=' .env; then
-  warn ".env exists but has no DATABASE_URL line."
-else
-  log ".env OK (DATABASE_URL present)."
-fi
-
 chmod +x "$ROOT/start-number1.sh" "$ROOT/start-number2.sh" 2>/dev/null || true
 
 log "Setup complete."

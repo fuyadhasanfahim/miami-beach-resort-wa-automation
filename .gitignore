@@ -6,3 +6,5 @@ vendor/
 .wwebjs_cache/
 instances/*/.wwebjs_auth/
 instances/*/.wwebjs_cache/
+instances/*/replied.json
+instances/*/replied.json.tmp

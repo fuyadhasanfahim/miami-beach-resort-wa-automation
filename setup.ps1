@@ -67,14 +67,6 @@ if (Test-Path "node_modules\puppeteer\install.mjs") {
   catch { Write-Warning "Chromium download failed. Set executable_path in a config.json to a local Chrome." }
 }
 
-if (-not (Test-Path ".env")) {
-  Write-Warning '.env not found. Create it with: DATABASE_URL="mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/wa-automation?appName=Cluster0"'
-} elseif (-not (Select-String -Path ".env" -Pattern '^DATABASE_URL=' -Quiet)) {
-  Write-Warning ".env exists but has no DATABASE_URL line."
-} else {
-  Write-Host "[setup] .env OK (DATABASE_URL present)."
-}
-
 Write-Host "[setup] Setup complete."
 Write-Host "[setup] Start number 1:  node run.js number1"
 Write-Host "[setup] Start number 2:  node run.js number2"
