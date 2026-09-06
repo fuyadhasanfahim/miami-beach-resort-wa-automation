@@ -15,7 +15,7 @@
   ],
   "video_path": "video.mp4",
   "audio_path": "voice.ogg",
-  "concurrency": 3,
+  "concurrency": 5,
   "send_delay_ms": 1000,
   "send_retry_attempts": 3,
   "send_retry_base_ms": 2000
