@@ -1,0 +1,8 @@
+node_modules/
+vendor/
+.env
+
+.wwebjs_auth/
+.wwebjs_cache/
+instances/*/.wwebjs_auth/
+instances/*/.wwebjs_cache/

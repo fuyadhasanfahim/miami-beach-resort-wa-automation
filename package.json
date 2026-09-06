@@ -1,0 +1,21 @@
+{
+  "name": "wa-automation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Locally-hosted WhatsApp one-time auto-reply bot (whatsapp-web.js). Multi-instance: run one process per WhatsApp number.",
+  "main": "run.js",
+  "scripts": {
+    "postinstall": "node node_modules/puppeteer/install.mjs || true",
+    "start:number1": "node run.js number1",
+    "start:number2": "node run.js number2"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "mongodb": "^7.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.7"
+  },
+  "allowScripts": {
+    "puppeteer@24.38.0": true
+  }
+}
