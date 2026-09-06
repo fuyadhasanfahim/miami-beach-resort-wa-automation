@@ -51,8 +51,11 @@ wa-automation/
 ├─ run.js                     # entry point: node run.js <instance>
 ├─ start-number1.sh           # start the bot for WhatsApp number 1
 ├─ start-number2.sh           # start the bot for WhatsApp number 2
+├─ stop-number1.sh            # stop number 1 + clear orphan Chromium / locks
+├─ stop-number2.sh            # stop number 2 + clear orphan Chromium / locks
 ├─ scripts/
-│  └─ load-node.sh            # adds vendor/node to PATH when present
+│  ├─ load-node.sh            # adds vendor/node to PATH when present
+│  └─ cleanup.sh              # kill + unlock one instance (used by start/stop)
 ├─ vendor/node/               # local Node.js, only if setup.sh had to install it
 ├─ src/
 │  ├─ bot.js                  # client setup + event handlers (shared)
@@ -173,17 +176,37 @@ after that is ignored.
 
 ---
 
+## Stopping
+
+Use the stop scripts (or `Ctrl+C` in the bot's terminal). **Do not `kill -9`** —
+that orphans the Chromium and the next start has to clean it up.
+
+```bash
+./stop-number1.sh
+./stop-number2.sh
+```
+
+`start-number1.sh` / `start-number2.sh` also run this cleanup automatically
+before starting, so a plain re-run is always safe.
+
+---
+
 ## Resetting
 
 - **Let everyone get the sequence again (one number):** stop the bot, delete
   `instances/number1/replied.json`, start again.
 - **Re-send to one person:** stop the bot, open `instances/number1/replied.json`
   (a JSON array of ids), remove that person's id, save, start again.
-- **Force a fresh QR / log out a number:** delete that instance's
-  `.wwebjs_auth/` folder, then restart.
+- **Force a fresh QR / re-pair a number:** stop the bot, delete that instance's
+  `.wwebjs_auth/` folder, start again, scan the new QR.
+- **Log says `Disconnected (LOGOUT)` and the bot exits:** WhatsApp un-paired that
+  linked device. On the phone open **WhatsApp → Linked devices** (max 4 devices —
+  remove old ones), then delete `instances/<name>/.wwebjs_auth/` and start again
+  to scan a fresh QR. Frequent re-scanning or heavy sending makes WhatsApp do
+  this, so keep the process running once it's up rather than restarting a lot.
 - **"The browser is already running for ...":** a previous run's Chromium didn't
-  exit. Kill leftover `chrome`/`node` processes for this project (or delete
-  `instances/<name>/.wwebjs_auth/session-<name>/SingletonLock`), then restart.
+  exit. Run `./stop-number1.sh` (it kills the orphan and clears the lock), then
+  start again.
 
 ---
 

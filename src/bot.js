@@ -154,9 +154,42 @@ async function startBot(ctx) {
   client.on('message', (m) => handleIncoming(m, 'message'));
   client.on('message_create', (m) => handleIncoming(m, 'message_create'));
 
-  client.on('disconnected', (reason) => {
-    log(`Disconnected (${reason}). Re-initializing in 5s...`);
-    setTimeout(() => {
+  // Reasons that mean the linked-device session is dead — re-initializing the
+  // same client just loops on the QR screen (and trips wwebjs's
+  // "onQRChangedEvent already exists" bug). Exit so the operator re-scans
+  // (or a process manager restarts us fresh).
+  const TERMINAL_DISCONNECTS = new Set([
+    'LOGOUT',
+    'UNPAIRED',
+    'UNPAIRED_IDLE',
+    'CONFLICT',
+  ]);
+
+  let stopping = false;
+
+  client.on('disconnected', async (reason) => {
+    if (stopping) return;
+
+    if (TERMINAL_DISCONNECTS.has(reason)) {
+      stopping = true;
+      log(`Disconnected (${reason}). This session is no longer paired.`);
+      log(`Delete instances/${instanceKey}/.wwebjs_auth and start again to scan a fresh QR,`);
+      log('and check WhatsApp > Linked devices on the phone (max 4 devices).');
+      try {
+        await client.destroy();
+      } catch (_) {
+        /* best effort */
+      }
+      process.exit(1);
+    }
+
+    log(`Disconnected (${reason}). Rebuilding client in 5s...`);
+    setTimeout(async () => {
+      try {
+        await client.destroy();
+      } catch (_) {
+        /* ignore */
+      }
       log('Re-initializing client now.');
       client.initialize().catch((e) => log(`Re-init failed: ${e.message}`));
     }, 5000);
@@ -167,6 +200,8 @@ async function startBot(ctx) {
   });
 
   async function shutdown(signal) {
+    if (stopping) return;
+    stopping = true;
     log(`${signal} received. Shutting down...`);
     try {
       await client.destroy();
