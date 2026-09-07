@@ -10,4 +10,6 @@ instances/*/replied.json
 instances/*/replied.json.tmp
 instances/*/progress.json
 instances/*/progress.json.tmp
+instances/*/daily.json
+instances/*/daily.json.tmp
 instances/*/run.log

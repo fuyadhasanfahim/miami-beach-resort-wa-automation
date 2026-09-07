@@ -8,6 +8,7 @@ const { makeLogger } = require('./logger');
 const { resolveSettings } = require('./settings');
 const { createRepliedStore } = require('./repliedStore');
 const { createProgressStore } = require('./progressStore');
+const { createDailyCap } = require('./dailyCap');
 const { createDispatcher } = require('./dispatcher');
 const { createReplyPlan, runReplySequence } = require('./replySequence');
 const { startWatchdog } = require('./watchdog');
@@ -38,7 +39,11 @@ async function startBot(ctx) {
 
   const replied = createRepliedStore(path.join(instanceDir, 'replied.json'));
   const progress = createProgressStore(path.join(instanceDir, 'progress.json'));
+  const dailyCap = createDailyCap(path.join(instanceDir, 'daily.json'), settings.dailyNewContactCap);
   log(`Reply history: ${replied.size()} completed, ${progress.size()} partial.`);
+  if (dailyCap.enabled()) {
+    log(`Daily new-contact cap: ${dailyCap.limit()} (used ${dailyCap.used()} today).`);
+  }
 
   const plan = createReplyPlan({ config, resolveAsset: ctx.resolveAsset, log });
   if (plan.count === 0) {
@@ -125,10 +130,18 @@ async function startBot(ctx) {
         );
         replied.add(senderId);
         progress.clear(senderId);
-        log(`Done ${senderId}.`);
+        dailyCap.record();
+        const tally = dailyCap.enabled() ? ` (${dailyCap.used()}/${dailyCap.limit()} today)` : '';
+        log(`Done ${senderId}.${tally}`);
       } catch (err) {
         const msg = err && err.message ? err.message : String(err);
-        log(`Failed ${senderId}: ${msg}. Progress ${progress.get(senderId)}/${plan.count} saved; retries on next message.`);
+        if (err && err.permanent) {
+          replied.add(senderId);
+          progress.clear(senderId);
+          log(`Failed ${senderId}: ${msg}. Permanent — marked replied, will not retry.`);
+        } else {
+          log(`Failed ${senderId}: ${msg}. Progress ${progress.get(senderId)}/${plan.count} saved; retries on next message.`);
+        }
       } finally {
         inFlight.delete(senderId);
       }
@@ -187,6 +200,10 @@ async function startBot(ctx) {
     }
     if (inFlight.has(senderId)) {
       log(`${senderId} already queued / in progress. Ignoring.`);
+      return;
+    }
+    if (dailyCap.reached()) {
+      log(`Daily new-contact cap reached (${dailyCap.limit()}). Ignoring ${senderId} until tomorrow.`);
       return;
     }
 
