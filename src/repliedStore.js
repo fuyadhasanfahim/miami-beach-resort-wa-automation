@@ -2,10 +2,6 @@
 
 const fs = require('fs');
 
-// Remembers which senders have already received the reply sequence, so each
-// sender is only ever replied to once. Backed by a plain JSON array on disk
-// (no database, no network). To let everyone get the sequence again, delete
-// the instance's replied.json file.
 function createRepliedStore(filePath) {
   let ids = new Set();
 
