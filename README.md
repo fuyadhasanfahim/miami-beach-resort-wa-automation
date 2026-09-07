@@ -140,6 +140,10 @@ Edit `instances/number1/config.json` (and `instances/number2/config.json`):
 | `send_delay_ms`   | Pause between each send inside one sequence (default `1000`). Lower (e.g. `700`) to make each sequence faster. |
 | `send_retry_attempts` | Times to try each individual send before failing it (default `3`). |
 | `send_retry_base_ms`  | First retry backoff; doubles each time — 2s, 4s, 8s (default `2000`). |
+| `send_delay_min_ms` / `send_delay_max_ms` | Random pause between items in a sequence is picked in this window (defaults derived from `send_delay_ms`: `1000`–`2500`). Replaces the old fixed cadence so the burst looks less mechanical. |
+| `heavy_media_delay_min_ms` / `heavy_media_delay_max_ms` | Extra random pause added *before* the video and the voice note (default `3000`–`9000`). Set both to `0` to disable. |
+| `pre_reply_delay_max_ms` | Each new sequence starts after a random `0`–this delay (default `6000`). `0` disables. |
+| `daily_new_contact_cap` | Max **new** senders fully replied to per calendar day (default `0` = unlimited). After the cap, first-time senders are ignored until the next day; the count is kept in `daily.json`. A sane starting value for one number is `120`–`200`. |
 | `executable_path` | *(optional)* Path to a specific Chrome/Chromium binary.               |
 
 Both numbers currently use the **same shared content** from `assets/`. To give a
@@ -253,6 +257,14 @@ Long unattended runs are protected by four mechanisms:
   the sender's next message resumes from the next unsent item instead of
   repeating the whole batch. `replied.json` is only written after the full
   sequence completes.
+- **Fail-fast on dead targets.** A permanent send error (number not on
+  WhatsApp, invalid id, blocked) is not retried; the sender is marked replied
+  so the sequence is not re-attempted on their next message.
+
+Outreach pacing (spam-pattern reduction): sends use a randomised gap instead of
+a fixed 1s, video/audio get an extra random pause, each sequence starts after a
+short random delay, and `daily_new_contact_cap` can hard-limit first-time
+replies per day. See the config table for the keys.
 
 All timeouts and thresholds are optional keys in `instances/<name>/config.json`;
 the defaults are tuned for the 8-image + video + audio sequence.
