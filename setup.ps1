@@ -67,7 +67,16 @@ if (Test-Path "node_modules\puppeteer\install.mjs") {
   catch { Write-Warning "Chromium download failed. Set executable_path in a config.json to a local Chrome." }
 }
 
+if (Test-Path "node_modules\pm2\bin\pm2") {
+  Write-Host "[setup] Process manager: pm2 $(node node_modules\pm2\bin\pm2 -v) (installed locally)."
+  try { npm install -g pm2 2>$null | Out-Null; Write-Host "[setup] pm2 also installed globally." }
+  catch { Write-Warning "Could not install pm2 globally - not required, the start scripts use the local copy." }
+} else {
+  Write-Warning "pm2 missing from node_modules after install; the start scripts will re-run 'npm install'."
+}
+
 Write-Host "[setup] Setup complete."
-Write-Host "[setup] Start number 1:  node run.js number1"
-Write-Host "[setup] Start number 2:  node run.js number2"
+Write-Host "[setup] Start number 1:  .\start-number1.ps1"
+Write-Host "[setup] Start number 2:  .\start-number2.ps1"
+Write-Host "[setup] Each start runs the bot under pm2 and auto-restarts it on crash / unhealthy exit."
 Write-Host "[setup] (this shell already has the local Node on PATH; a new window needs setup.ps1 re-run or vendor\node added to PATH)"

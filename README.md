@@ -111,9 +111,11 @@ The setup script:
 1. Detects your OS and CPU architecture.
 2. If Node.js 18+ is missing, downloads a local copy into `vendor/node/`
    (no admin rights, nothing installed system-wide).
-3. Runs `npm install`.
+3. Runs `npm install` (this also installs **pm2**, the process manager the
+   start scripts use, into `node_modules/`).
 4. Downloads the Chromium build WhatsApp Web needs.
-5. Makes the start scripts executable.
+5. Tries a global `pm2` install too (optional; ignored if it needs admin).
+6. Makes the start scripts executable.
 
 If you already have Node.js and just want dependencies: `npm install`.
 
@@ -148,27 +150,31 @@ number its own content, point its `assets_dir` at a different folder, or set the
 
 ## Run
 
-Open **two separate terminals** — one per number.
+Every start goes through **pm2**. The start script (re)registers the instance
+with pm2, starts it, saves the pm2 process list, then tails the log. pm2 keeps
+the bot alive: it restarts it on a crash and on the watchdog's unhealthy exit
+(5s back-off, up to 50 restarts inside the stability window). Pressing `Ctrl+C`
+only closes the log view — the bot keeps running in the background.
 
-**Terminal 1 — WhatsApp number 1:**
-```bash
-./start-number1.sh
-```
-A QR code appears. On the phone with **number 1**, open
-**WhatsApp → Settings → Linked devices → Link a device** and scan it.
+| | Linux / macOS / Git Bash / WSL | Windows PowerShell |
+|--|------------------------------|-------------------|
+| Start number 1 | `./start-number1.sh` | `.\start-number1.ps1` |
+| Start number 2 | `./start-number2.sh` | `.\start-number2.ps1` |
+| Stop number 1 | `./stop-number1.sh` | `.\stop-number1.ps1` |
+| Stop number 2 | `./stop-number2.sh` | `.\stop-number2.ps1` |
+| All instances, live logs | `npm run logs` | `npm run logs` |
+| Process status | `npm run status` | `npm run status` |
 
-**Terminal 2 — WhatsApp number 2:**
-```bash
-./start-number2.sh
-```
-Scan this QR with the phone holding **number 2**.
+On the **first** start a QR code appears in the log tail. On the phone for that
+number, open **WhatsApp → Settings → Linked devices → Link a device** and scan
+it. After the first scan the session is saved in that instance's
+`.wwebjs_auth/` folder — later starts connect automatically without a QR.
 
-(You can also run `npm run start:number1` / `npm run start:number2`, or
-`node run.js number1` directly — the shell scripts just do that for you and run
-`npm install` first if needed.)
+To also bring the pm2 apps back after an OS reboot, run `pm2 startup` once
+(follow the printed instruction) and then `pm2 save`. On Windows use
+`pm2-installer` or the `pm2-startup` package for the same effect.
 
-After the first scan, the session is saved in that instance's `.wwebjs_auth/`
-folder — subsequent starts connect automatically without a QR.
+For a foreground run without pm2 (debugging only): `npm run run:number1`.
 
 When you see `Client is ready. ... Waiting for messages...`, message the bot
 number from another phone. The first message gets the full sequence; anything
@@ -178,16 +184,17 @@ after that is ignored.
 
 ## Stopping
 
-Use the stop scripts (or `Ctrl+C` in the bot's terminal). **Do not `kill -9`** —
-that orphans the Chromium and the next start has to clean it up.
+`Ctrl+C` in the start terminal only detaches the log view; pm2 keeps the bot
+running. To actually stop it, use the stop script — it removes the app from pm2
+and clears any leftover Chromium / lock files. **Do not `kill -9`.**
 
 ```bash
-./stop-number1.sh
-./stop-number2.sh
+./stop-number1.sh      # Windows PowerShell: .\stop-number1.ps1
+./stop-number2.sh      # Windows PowerShell: .\stop-number2.ps1
 ```
 
-`start-number1.sh` / `start-number2.sh` also run this cleanup automatically
-before starting, so a plain re-run is always safe.
+The start scripts also run that cleanup before (re)starting, so a plain re-run
+is always safe.
 
 ---
 
@@ -196,7 +203,9 @@ before starting, so a plain re-run is always safe.
 - **Let everyone get the sequence again (one number):** stop the bot, delete
   `instances/number1/replied.json`, start again.
 - **Re-send to one person:** stop the bot, open `instances/number1/replied.json`
-  (a JSON array of ids), remove that person's id, save, start again.
+  (a JSON array of ids), remove that person's id, save, start again. If that id
+  also appears in `instances/number1/progress.json` (a partial send), remove it
+  there too.
 - **Force a fresh QR / re-pair a number:** stop the bot, delete that instance's
   `.wwebjs_auth/` folder, start again, scan the new QR.
 - **Log says `Disconnected (LOGOUT)` and the bot exits:** WhatsApp un-paired that
@@ -213,10 +222,40 @@ before starting, so a plain re-run is always safe.
 ## Logs
 
 Every line is timestamped and tagged with the instance name. You'll see log
-lines for: QR shown, authenticated, ready, each inbound message
+lines for: QR shown, authenticated, ready, watchdog status, each inbound message
 (`Inbound (...) from=... type=... body="..."`), why a message was skipped,
-`Queued ... (active X/N, waiting Y)`, `Processing ...`, each item sent, retries,
-`Done ...`, failures, disconnect, and reconnect attempts.
+`Queued ... (active X/N, waiting Y)`, `Processing ...` (with `resuming N/M` on a
+partial retry), each item sent (`sent <item> (N/M)`), retries, `Done ...`,
+failures, disconnect, and `Exiting (...)`.
+
+The shell scripts and the pm2 config write this stream to
+`instances/<name>/run.log` as well as the terminal.
+
+---
+
+## Reliability
+
+Long unattended runs are protected by four mechanisms:
+
+- **Per-step timeouts.** Every `sendMessage`, chat lookup and full reply
+  sequence is time-boxed (`action_timeout_ms`, `sequence_timeout_ms`,
+  `chat_resolve_timeout_ms`). A stalled WhatsApp Web page can no longer hang a
+  send forever.
+- **Concurrency-slot recovery.** The dispatcher time-boxes each job
+  (`job_timeout_ms`), so a wedged send always releases its slot and the queue
+  keeps draining.
+- **Health watchdog.** Every `health_check_interval_ms` the bot calls
+  `getState()`; after `health_check_max_failures` consecutive bad results (or a
+  job stuck past `stuck_job_ms`) it exits non-zero so the supervisor / pm2 can
+  restart it clean. Re-initialising a broken client in place is not attempted.
+- **Partial-send resume.** Progress is written to
+  `instances/<name>/progress.json` after each item. If a sequence fails halfway,
+  the sender's next message resumes from the next unsent item instead of
+  repeating the whole batch. `replied.json` is only written after the full
+  sequence completes.
+
+All timeouts and thresholds are optional keys in `instances/<name>/config.json`;
+the defaults are tuned for the 8-image + video + audio sequence.
 
 ---
 
@@ -225,22 +264,19 @@ lines for: QR shown, authenticated, ready, each inbound message
 - This uses **whatsapp-web.js**, an unofficial library that automates WhatsApp
   Web. It is not an official WhatsApp API. Aggressive mass-messaging can get a
   number flagged.
-- The machine must stay running with the process alive for the bot to work. To
-  keep it running in the background, use a process manager such as
-  [`pm2`](https://pm2.keymetrics.io/):
-  ```bash
-  npm install -g pm2
-  pm2 start run.js --name wa-number1 -- number1
-  pm2 start run.js --name wa-number2 -- number2
-  pm2 save
-  ```
+- The machine must stay running for the bot to work. The start scripts run it
+  under [`pm2`](https://pm2.keymetrics.io/) using the bundled
+  `ecosystem.config.js`, which restarts the bot automatically when it crashes or
+  the watchdog exits it. `npm run status` / `npm run logs` inspect it; run
+  `pm2 startup` + `pm2 save` once to also survive an OS reboot.
 - Throughput vs. safety: `concurrency` and `send_delay_ms` are the two knobs.
   Higher concurrency / lower delay clears a burst faster but pushes WhatsApp Web
   and the single browser page harder. Start at `concurrency: 3`,
   `send_delay_ms: 1000` and adjust while watching the logs for send errors.
 - Duplicate protection: repeat messages from the same person (or the `message` +
   `message_create` events firing together) are ignored while that sender is
-  queued / in progress, and afterwards via `replied.json`.
+  queued / in progress, and afterwards via `replied.json`. A half-finished
+  sequence resumes from `progress.json` rather than restarting.
 
 ---
 

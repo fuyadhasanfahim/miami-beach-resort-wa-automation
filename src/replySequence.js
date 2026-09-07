@@ -3,23 +3,26 @@
 const fs = require('fs');
 const path = require('path');
 const { MessageMedia } = require('whatsapp-web.js');
+const { withTimeout } = require('./withTimeout');
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function buildActions({ config, resolveAsset, log }) {
+function createReplyPlan({ config, resolveAsset, log }) {
   const actions = [];
 
-  if (config.reply_text && config.reply_text.trim()) {
+  const text = (config.reply_text || '').trim();
+  if (text) {
     actions.push({
       label: 'text message',
-      run: (t) => t.sendMessage(config.reply_text, { linkPreview: false }),
+      run: (t) => t.sendMessage(text, { linkPreview: false }),
     });
   }
 
-  if (config.reply_link && config.reply_link.trim()) {
+  const link = (config.reply_link || '').trim();
+  if (link) {
     actions.push({
       label: 'link',
-      run: (t) => t.sendMessage(config.reply_link.trim(), { linkPreview: false }),
+      run: (t) => t.sendMessage(link, { linkPreview: false }),
     });
   }
 
@@ -30,57 +33,57 @@ function buildActions({ config, resolveAsset, log }) {
 
   for (const m of media) {
     if (!fs.existsSync(m.abs)) {
-      log(`  WARNING: file missing, skipping: ${m.abs}`);
+      log(`asset missing, skipped: ${m.abs}`);
       continue;
     }
-    const label = `${m.kind} ${path.basename(m.abs)}`;
-    if (m.kind === 'audio') {
-      actions.push({
-        label,
-        run: (t) => t.sendMessage(MessageMedia.fromFilePath(m.abs), { sendAudioAsVoice: true }),
-      });
-    } else {
-      actions.push({ label, run: (t) => t.sendMessage(MessageMedia.fromFilePath(m.abs)) });
-    }
+    const payload = MessageMedia.fromFilePath(m.abs);
+    const options = m.kind === 'audio' ? { sendAudioAsVoice: true } : undefined;
+    actions.push({
+      label: `${m.kind} ${path.basename(m.abs)}`,
+      run: (t) => t.sendMessage(payload, options),
+    });
   }
 
-  return actions;
+  return { actions, count: actions.length };
 }
 
-async function withRetry(fn, { attempts, baseMs, label, log }) {
+async function withRetry(fn, { attempts, baseMs, timeoutMs, label, log }) {
   let lastErr;
-  for (let i = 1; i <= attempts; i++) {
+  for (let i = 1; i <= attempts; i += 1) {
     try {
-      return await fn();
+      return await withTimeout(fn, timeoutMs, label);
     } catch (err) {
       lastErr = err;
       const msg = err && err.message ? err.message : String(err);
       if (i < attempts) {
-        const delay = baseMs * Math.pow(2, i - 1);
-        log(`  retry ${i}/${attempts - 1} for ${label} in ${delay}ms (${msg})`);
+        const delay = baseMs * 2 ** (i - 1);
+        log(`retry ${i}/${attempts - 1} ${label} in ${delay}ms (${msg})`);
         await wait(delay);
       } else {
-        log(`  FAILED ${label} after ${attempts} attempts (${msg})`);
+        log(`failed ${label} after ${attempts} attempt(s) (${msg})`);
       }
     }
   }
   throw lastErr;
 }
 
-async function runReplySequence({ target, ctx, log }) {
-  const { config, resolveAsset } = ctx;
-  const gap = Number.isFinite(config.send_delay_ms) ? config.send_delay_ms : 1000;
-  const attempts = Number.isFinite(config.send_retry_attempts) ? config.send_retry_attempts : 3;
-  const baseMs = Number.isFinite(config.send_retry_base_ms) ? config.send_retry_base_ms : 2000;
+async function runReplySequence({ plan, target, settings, startIndex = 0, onProgress, log }) {
+  const { actions } = plan;
+  const begin = Math.max(0, Math.min(startIndex, actions.length));
 
-  const actions = buildActions({ config, resolveAsset, log });
-
-  for (let i = 0; i < actions.length; i++) {
+  for (let i = begin; i < actions.length; i += 1) {
     const action = actions[i];
-    await withRetry(() => action.run(target), { attempts, baseMs, label: action.label, log });
-    log(`  sent ${action.label}`);
-    if (i < actions.length - 1) await wait(gap);
+    await withRetry(() => action.run(target), {
+      attempts: settings.sendRetryAttempts,
+      baseMs: settings.sendRetryBaseMs,
+      timeoutMs: settings.actionTimeoutMs,
+      label: action.label,
+      log,
+    });
+    log(`sent ${action.label} (${i + 1}/${actions.length})`);
+    if (onProgress) onProgress(i + 1);
+    if (i < actions.length - 1) await wait(settings.sendDelayMs);
   }
 }
 
-module.exports = { runReplySequence };
+module.exports = { createReplyPlan, runReplySequence };

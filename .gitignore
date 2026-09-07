@@ -8,3 +8,6 @@ instances/*/.wwebjs_auth/
 instances/*/.wwebjs_cache/
 instances/*/replied.json
 instances/*/replied.json.tmp
+instances/*/progress.json
+instances/*/progress.json.tmp
+instances/*/run.log

@@ -119,8 +119,22 @@ if [ "$OS" = linux ]; then
   warn "  sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2"
 fi
 
-chmod +x "$ROOT/start-number1.sh" "$ROOT/start-number2.sh" 2>/dev/null || true
+if [ -f node_modules/pm2/bin/pm2 ]; then
+  log "Process manager: pm2 $(node node_modules/pm2/bin/pm2 -v) (installed locally)."
+  if npm install -g pm2 >/dev/null 2>&1; then
+    log "pm2 also installed globally."
+  else
+    warn "Could not install pm2 globally (needs admin) — not required, the start scripts use the local copy."
+  fi
+else
+  warn "pm2 missing from node_modules after install; the start scripts will re-run 'npm install'."
+fi
+
+chmod +x "$ROOT/start-number1.sh" "$ROOT/start-number2.sh" \
+         "$ROOT/stop-number1.sh" "$ROOT/stop-number2.sh" 2>/dev/null || true
 
 log "Setup complete."
-log "Start number 1:  ./start-number1.sh"
-log "Start number 2:  ./start-number2.sh"
+log "Start number 1:  ./start-number1.sh      (Windows PowerShell: .\\start-number1.ps1)"
+log "Start number 2:  ./start-number2.sh      (Windows PowerShell: .\\start-number2.ps1)"
+log "Each start runs the bot under pm2 and auto-restarts it on crash / unhealthy exit."
+log "To also relaunch pm2 after an OS reboot:  pm2 startup   then   pm2 save"
