@@ -57,6 +57,37 @@ function createWebhookRouter({ verifyToken, instances, log }) {
           if (phoneNumberId) log(`Webhook event for unconfigured phone_number_id=${phoneNumberId}, ignoring.`);
           continue;
         }
+
+        if (change.field === 'history') {
+          // Coexistence: WhatsApp Business App history synced after connecting
+          // — these people already have a conversation, so automation must
+          // never message them, ever.
+          let count = 0;
+          for (const chunk of value.history || []) {
+            for (const thread of chunk.threads || []) {
+              if (!thread.id) continue;
+              instance.markHandled(thread.id, 'existing WhatsApp Business App history');
+              count += 1;
+            }
+          }
+          if (count > 0) log(`Synced ${count} existing contact(s) from WhatsApp Business App history.`);
+          continue;
+        }
+
+        if (change.field === 'smb_message_echoes') {
+          // Coexistence: staff replied to this person from the phone app —
+          // automation should not also send them the sequence.
+          for (const echo of value.message_echoes || []) {
+            if (echo.to) instance.markHandled(echo.to, 'staff replied from WhatsApp Business App');
+          }
+          continue;
+        }
+
+        if (change.field === 'smb_app_state_sync') {
+          // Contacts only, no message history — nothing for automation to do.
+          continue;
+        }
+
         for (const message of value.messages || []) {
           instance.handleIncomingMessage(message);
         }

@@ -51,11 +51,27 @@ function createGraphClient({ phoneNumberId, accessToken }) {
     return payload;
   }
 
+  // Coexistence: one-time, per onboarding, within 24h — triggers the
+  // `smb_app_state_sync` / `history` webhooks with the customer's existing
+  // WhatsApp Business App contacts / message history.
+  async function requestSmbAppDataSync(syncType) {
+    const url = `${GRAPH_BASE}/${GRAPH_VERSION}/${phoneNumberId}/smb_app_data`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ messaging_product: 'whatsapp', sync_type: syncType }),
+    });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok) throw toApiError(payload, res.status);
+    return payload;
+  }
+
   return {
     sendText: (to, text) => send({ to, type: 'text', text: { body: text, preview_url: false } }),
     sendImageLink: (to, link) => send({ to, type: 'image', image: { link } }),
     sendVideoLink: (to, link) => send({ to, type: 'video', video: { link } }),
     sendAudioLink: (to, link) => send({ to, type: 'audio', audio: { link } }),
+    requestSmbAppDataSync,
   };
 }
 

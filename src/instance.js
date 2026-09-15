@@ -101,7 +101,17 @@ function createInstance({ cfg, publicBaseUrl }) {
     log(`Queued ${senderId} (active ${stats.active}/${stats.concurrency}, waiting ${stats.pending}).`);
   }
 
-  return { cfg, replied, progress, dailyCap, handleIncomingMessage };
+  // Used for coexistence: a number already messaged in WhatsApp Business App
+  // history, or one the staff just replied to manually from the app, should
+  // never get the automated sequence.
+  function markHandled(senderId, reason) {
+    if (!senderId || replied.has(senderId)) return;
+    replied.add(senderId);
+    progress.clear(senderId);
+    log(`${senderId} marked replied (${reason}) — automation will skip them.`);
+  }
+
+  return { cfg, replied, progress, dailyCap, handleIncomingMessage, markHandled };
 }
 
 module.exports = { createInstance };

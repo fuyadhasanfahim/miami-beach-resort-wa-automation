@@ -167,9 +167,14 @@ Caddy needed here, Railway terminates HTTPS for you on both its own
 3. Verify token: the same value you put in `.env` as `VERIFY_TOKEN`.
 4. Click **Verify and save** — Meta calls the URL once; the server logs
    `Webhook verified by Meta.` on success.
-5. Under **Webhook fields**, subscribe to `messages` and `account_update`
-   (the second one is only used as a debug/fallback log line for Embedded
-   Signup completions — see below — but costs nothing to subscribe to).
+5. Under **Webhook fields**, subscribe to:
+   - `messages` — required, this is the actual auto-reply trigger.
+   - `account_update` — optional; only used as a debug/fallback log line for
+     Embedded Signup completions, costs nothing to subscribe to.
+   - `history`, `smb_app_state_sync`, `smb_message_echoes` — required **only**
+     if you want Coexistence (keep using the WhatsApp Business App on the
+     phone alongside automation — see below). Skip these three if a number
+     will be automation-only.
 6. This one webhook URL is shared by every number, whether it was added via
    `.env` or through `/connect` — nothing to repeat per number.
 
@@ -206,6 +211,47 @@ You said this isn't done yet — here's the exact path:
    can complete Embedded Signup. Meta App Review is required before
    *other* businesses can use it — not needed if it's only ever going to
    onboard Miami Beach Resort's own numbers.
+
+### Coexistence — keep using the WhatsApp Business App too
+
+If a number is already active in the **WhatsApp Business App** on someone's
+phone, connecting it here doesn't have to disconnect that app — this is
+Meta's **Coexistence** feature. During `/connect`, if the WABA-selection
+step shows an option to *"connect your existing WhatsApp Business account"*,
+that's it — Coexistence is available because the `history`,
+`smb_app_state_sync`, and `smb_message_echoes` webhook fields are
+subscribed (see above).
+
+What this gets you, automatically, with no extra setup on your part:
+
+- **Existing contacts are never auto-messaged.** Right after a number
+  connects, the server requests a one-time sync of that number's WhatsApp
+  Business App message history (last 180 days) and marks every person in it
+  as already-replied — so someone with an existing conversation never gets
+  the automated sequence. This is the WhatsApp-Business-App-based version of
+  the "don't message people we've already talked to" list from the old
+  system.
+- **No double-replies.** When staff reply to someone manually from the
+  phone app, Meta echoes that message to the server, which marks that
+  person as replied too — automation won't also send them the sequence
+  later.
+
+**Limits to know about, from Meta's side (not this code):**
+- 20 messages/sec combined cap across the app + automation, on that number.
+- History sync only covers the last 180 days, and can only be requested
+  once, within 24h of connecting (this server does it automatically right
+  when `/connect` finishes — don't wait days to connect a number if you
+  want its history synced).
+- Disabled while Coexistence is active on a number: disappearing messages,
+  view-once messages, live location, broadcast lists, voice/video calls,
+  group chats. Regular 1:1 chat (what this bot needs) is unaffected.
+- WhatsApp for Windows and WearOS aren't supported as linked devices in
+  this mode; phone + other companion apps are fine.
+
+If a number should be **automation-only** (no one needs the phone app for
+it), just don't subscribe those three webhook fields for it, or ignore the
+"connect existing account" option during signup — it behaves like a normal
+Cloud API number.
 
 ### Using it
 

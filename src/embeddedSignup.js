@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
+const { createGraphClient } = require('./graphClient');
 
 const GRAPH_VERSION = process.env.GRAPH_API_VERSION || 'v21.0';
 const GRAPH_BASE = 'https://graph.facebook.com';
@@ -45,6 +46,22 @@ async function listWabaPhoneNumbers({ wabaId, accessToken }) {
     throw new Error((payload && payload.error && payload.error.message) || `phone_numbers lookup failed (HTTP ${res.status})`);
   }
   return (payload && payload.data) || [];
+}
+
+// Coexistence only has a window (24h from onboarding) to request this sync —
+// fire it right away. Numbers that weren't onboarded from an existing
+// WhatsApp Business App simply have nothing to sync, so failures here are
+// logged and swallowed rather than failing the whole /connect request.
+async function requestCoexistenceSync({ phoneNumberId, accessToken, log }) {
+  const graph = createGraphClient({ phoneNumberId, accessToken });
+  for (const syncType of ['smb_app_state_sync', 'history']) {
+    try {
+      const result = await graph.requestSmbAppDataSync(syncType);
+      log(`Requested ${syncType} sync for phone_number_id=${phoneNumberId} (request_id=${result && result.request_id}).`);
+    } catch (err) {
+      log(`${syncType} sync not available for phone_number_id=${phoneNumberId}: ${err && err.message ? err.message : err} (fine if this number wasn't already using the WhatsApp Business App).`);
+    }
+  }
 }
 
 // Wires the public signup page + the server-side half of Meta's Embedded
@@ -115,6 +132,7 @@ function createEmbeddedSignupRouter({ registry, onNumberConnected, log }) {
         onNumberConnected(entry);
         connected.push({ phoneNumberId: id, label: entry.label });
         log(`Connected via Embedded Signup: ${entry.label} (phone_number_id=${id}, waba=${wabaId}).`);
+        requestCoexistenceSync({ phoneNumberId: id, accessToken, log }).catch(() => {});
       }
 
       res.json({ ok: true, connected });
