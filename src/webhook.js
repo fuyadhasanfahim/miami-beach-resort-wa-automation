@@ -41,6 +41,16 @@ function createWebhookRouter({ verifyToken, instances, log }) {
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
         const value = change.value || {};
+
+        if (change.field === 'account_update') {
+          // Fallback signal for Embedded Signup completions (the primary path
+          // is the browser posting straight to /connect/callback). Logged
+          // only — not auto-processed — since the browser flow already
+          // carries the waba_id/phone_number_id needed to finish setup.
+          log(`account_update webhook: ${JSON.stringify(value)}`);
+          continue;
+        }
+
         const phoneNumberId = value.metadata && value.metadata.phone_number_id;
         const instance = instances.get(phoneNumberId);
         if (!instance) {

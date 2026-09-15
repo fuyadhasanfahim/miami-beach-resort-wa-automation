@@ -9,6 +9,8 @@ const { makeLogger } = require('./src/logger');
 const { buildNumberConfigs } = require('./src/numbers');
 const { createInstance } = require('./src/instance');
 const { createWebhookRouter, verifySignature } = require('./src/webhook');
+const registry = require('./src/registry');
+const { createEmbeddedSignupRouter } = require('./src/embeddedSignup');
 
 const log = makeLogger('server');
 
@@ -26,15 +28,20 @@ if (!PUBLIC_BASE_URL) {
   process.exit(1);
 }
 
-const numberConfigs = buildNumberConfigs();
-if (numberConfigs.size === 0) {
-  console.error('No WhatsApp numbers configured. Set NUMBER1_PHONE_NUMBER_ID and NUMBER1_ACCESS_TOKEN in .env.');
-  process.exit(1);
+// Numbers can come from two places: static NUMBER1_*/NUMBER2_* env vars, or
+// numbers/registry.json (written by the /connect Embedded Signup flow).
+// Either can be empty at boot — /connect can add the very first number live.
+const instances = new Map();
+
+function registerNumber(cfg) {
+  instances.set(cfg.phoneNumberId, createInstance({ cfg, publicBaseUrl: PUBLIC_BASE_URL }));
 }
 
-const instances = new Map();
-for (const [phoneNumberId, cfg] of numberConfigs) {
-  instances.set(phoneNumberId, createInstance({ cfg, publicBaseUrl: PUBLIC_BASE_URL }));
+for (const [, cfg] of buildNumberConfigs()) registerNumber(cfg);
+for (const entry of registry.load()) registerNumber(entry);
+
+if (instances.size === 0) {
+  log('No WhatsApp numbers configured yet. Set NUMBER1_* in .env, or connect one at /connect.');
 }
 
 if (!APP_SECRET) {
@@ -49,6 +56,11 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '7d' }));
+
+app.use(
+  '/connect',
+  createEmbeddedSignupRouter({ registry, onNumberConnected: registerNumber, log }),
+);
 
 app.use(
   '/webhook',

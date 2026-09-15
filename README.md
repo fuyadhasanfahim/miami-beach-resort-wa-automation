@@ -14,9 +14,17 @@ WhatsApp Business Platform (Cloud API)** — no browser, no QR code, no
 third-party library. Meta pushes incoming messages to this server over an
 HTTPS webhook; the server sends replies back through Meta's Graph API.
 
-It supports **up to two WhatsApp numbers** from one process — Meta tells you
-which number a message came in on (`phone_number_id`), so one server and one
-webhook URL serve both.
+It supports **any number of WhatsApp numbers** from one process — Meta tells
+you which number a message came in on (`phone_number_id`), so one server and
+one webhook URL serve all of them. Numbers can be wired in two ways, and
+both can be used together:
+
+- **Static**: set `NUMBER1_*` / `NUMBER2_*` in `.env` (phone_number_id +
+  access token you copied from the Meta dashboard yourself).
+- **Self-serve**: open `/connect` in a browser and add a number through
+  Meta's **Embedded Signup** popup — no manual token copying, works from a
+  phone or a desktop browser, and the number goes live immediately with no
+  redeploy. See "Embedded Signup" below.
 
 ---
 
@@ -26,10 +34,13 @@ webhook URL serve both.
 wa-automation/
 ├─ package.json
 ├─ .env.example          # copy to .env and fill in
-├─ ecosystem.config.js   # pm2 process definition
-├─ server.js             # entry point: Express app + webhook + /assets
+├─ Dockerfile / docker-compose.yml / Caddyfile / railway.json
+├─ ecosystem.config.js   # pm2 process definition (non-Docker run)
+├─ server.js             # entry point: Express app + webhook + /connect + /assets
 ├─ src/
 │  ├─ numbers.js         # reads NUMBER1_*/NUMBER2_* from .env
+│  ├─ registry.js        # numbers/registry.json — numbers added via /connect
+│  ├─ embeddedSignup.js  # /connect page + Embedded Signup code exchange
 │  ├─ instance.js        # wires one number: history, queue, daily cap
 │  ├─ webhook.js         # GET verify handshake + POST message intake
 │  ├─ graphClient.js     # thin wrapper around Meta's Graph API
@@ -42,6 +53,8 @@ wa-automation/
 │  ├─ logger.js
 │  ├─ rand.js
 │  └─ withTimeout.js
+├─ public/
+│  └─ connect.html       # the /connect signup page (Meta JS SDK)
 ├─ assets/               # shared media, served publicly at /assets/*
 │  ├─ message.txt
 │  ├─ link.txt
@@ -49,6 +62,7 @@ wa-automation/
 │  ├─ video.mp4
 │  └─ voice.ogg
 └─ numbers/
+   ├─ registry.json      # numbers added via /connect (auto-created)
    ├─ number1/           # replied.json, progress.json, daily.json (auto-created)
    └─ number2/
 ```
@@ -100,6 +114,9 @@ working.
 | `NUMBER1_DAILY_CAP` / `NUMBER2_DAILY_CAP` | *(optional)* Max new senders replied to per day, per number. Unset/`0` = unlimited. |
 | `NUMBER1_CONCURRENCY` / `NUMBER2_CONCURRENCY` | *(optional)* Senders served in parallel per number (default `3`). |
 | `NUMBER1_SEND_DELAY_MS` / `NUMBER2_SEND_DELAY_MS` | *(optional)* Base pacing between items in one sender's sequence (default `1000`). |
+| `META_APP_ID` / `META_APP_SECRET` | Only needed for the `/connect` self-serve signup page. From Meta App dashboard → App settings → Basic. `META_APP_SECRET` is the same value as `APP_SECRET` above. |
+| `META_CONFIG_ID` | Only needed for `/connect`. The Embedded Signup Configuration ID — see "Embedded Signup" below for how to create one. |
+| `CONNECT_ADMIN_TOKEN` | Only needed for `/connect`. A password you make up; whoever opens the page must paste it in before it will onboard a number. |
 
 ---
 
@@ -137,6 +154,11 @@ Caddy needed here, Railway terminates HTTPS for you on both its own
    Once it resolves, update `PUBLIC_BASE_URL` to
    `https://wa.miamibeachresort.com` and redeploy.
 
+   Railway doesn't sell/register domains itself — `miamibeachresort.com`
+   has to already be registered somewhere (whoever manages its DNS today);
+   Railway only gives you the free `*.up.railway.app` one automatically,
+   plus lets you attach a domain you already own via the CNAME above.
+
 ### Webhook setup (Meta App dashboard)
 
 1. WhatsApp → Configuration → Webhook → **Edit**.
@@ -145,9 +167,62 @@ Caddy needed here, Railway terminates HTTPS for you on both its own
 3. Verify token: the same value you put in `.env` as `VERIFY_TOKEN`.
 4. Click **Verify and save** — Meta calls the URL once; the server logs
    `Webhook verified by Meta.` on success.
-5. Under **Webhook fields**, subscribe to `messages`.
-6. Repeat for the second number once you add it (same webhook URL — Meta
-   tells the server which number via `phone_number_id` in the payload).
+5. Under **Webhook fields**, subscribe to `messages` and `account_update`
+   (the second one is only used as a debug/fallback log line for Embedded
+   Signup completions — see below — but costs nothing to subscribe to).
+6. This one webhook URL is shared by every number, whether it was added via
+   `.env` or through `/connect` — nothing to repeat per number.
+
+---
+
+## Embedded Signup (`/connect` — self-serve number onboarding)
+
+Lets you (or the client) add a WhatsApp number through Meta's own popup —
+paste an admin token, click connect, log into the WhatsApp Business
+account, done. No copying phone_number_id / access token by hand, works
+from a phone or a laptop, and the number is live the moment it finishes —
+no redeploy.
+
+### One-time Meta App dashboard setup
+
+You said this isn't done yet — here's the exact path:
+
+1. In your Meta App, **Add Product → Facebook Login for Business** (search
+   "Facebook Login for Business" in the product picker if it's not shown on
+   the main page).
+2. Facebook Login for Business → **Configurations** → **Create configuration**.
+3. Choose **Business login for WhatsApp Embedded Signup** as the use case
+   (naming varies slightly by dashboard version — pick the WhatsApp-specific
+   embedded signup option, not generic login).
+4. Select the permissions it asks for (`whatsapp_business_management`,
+   `whatsapp_business_messaging` — the dashboard usually pre-selects the
+   right set for this use case).
+5. Save — you'll get a **Configuration ID** (a numeric string). That's
+   `META_CONFIG_ID` in `.env`.
+6. `META_APP_ID` / `META_APP_SECRET` are the same App ID / App secret you
+   already have from App settings → Basic (same value as `APP_SECRET`).
+7. If the app is still in **Development mode**, only people added as
+   Admins/Developers/Testers on the app (in Meta App dashboard → App roles)
+   can complete Embedded Signup. Meta App Review is required before
+   *other* businesses can use it — not needed if it's only ever going to
+   onboard Miami Beach Resort's own numbers.
+
+### Using it
+
+1. Open `PUBLIC_BASE_URL + /connect` in a browser (phone or desktop both
+   work).
+2. Paste in `CONNECT_ADMIN_TOKEN`.
+3. Click **Connect WhatsApp Number** — a Meta popup walks through picking
+   the WhatsApp Business Account and phone number.
+4. On success the page shows the connected `phoneNumberId` — that number
+   starts receiving/replying immediately, no restart needed. It's saved to
+   `numbers/registry.json` (persisted the same way as everything else under
+   `numbers/`, so it survives restarts/redeploys as long as that directory
+   — or the Railway Volume — is in place).
+
+Numbers added this way and numbers set via `NUMBER1_*`/`NUMBER2_*` in
+`.env` work side by side; there's no limit of two once you're on
+Embedded Signup.
 
 ---
 

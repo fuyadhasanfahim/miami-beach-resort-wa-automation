@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Connect WhatsApp Number</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #111; }
+  button { background: #25D366; color: #fff; border: none; padding: 12px 20px; border-radius: 8px; font-size: 16px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  input { width: 100%; padding: 10px; margin: 8px 0 16px; box-sizing: border-box; font-size: 15px; }
+  #status { margin-top: 16px; white-space: pre-wrap; font-size: 14px; color: #333; }
+  label { font-size: 14px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h2>Connect a WhatsApp number</h2>
+  <p>Paste the admin token, then click connect — a Meta popup will walk
+  through adding a WhatsApp Business number. This page never sees or stores
+  your access token; that stays on the server.</p>
+
+  <label for="adminToken">Admin token</label>
+  <input id="adminToken" type="password" placeholder="CONNECT_ADMIN_TOKEN" autocomplete="off" />
+  <button id="connectBtn" disabled>Connect WhatsApp Number</button>
+  <div id="status"></div>
+
+  <script>
+    let fbReady = false;
+    let sessionInfo = {};
+
+    fetch('/connect/config')
+      .then((r) => r.json())
+      .then((cfg) => {
+        const statusEl = document.getElementById('status');
+        if (!cfg.appId || !cfg.configId) {
+          statusEl.textContent = 'Server is missing META_APP_ID or META_CONFIG_ID — set those first.';
+          return;
+        }
+        window.fbAsyncInit = function () {
+          FB.init({ appId: cfg.appId, autoLogAppEvents: true, xfbml: true, version: 'v21.0' });
+          fbReady = true;
+          document.getElementById('connectBtn').disabled = false;
+        };
+        const s = document.createElement('script');
+        s.src = 'https://connect.facebook.net/en_US/sdk.js';
+        s.async = true;
+        document.body.appendChild(s);
+
+        document.getElementById('connectBtn').addEventListener('click', () => {
+          if (!fbReady) return;
+          const token = document.getElementById('adminToken').value.trim();
+          if (!token) {
+            statusEl.textContent = 'Enter the admin token first.';
+            return;
+          }
+          statusEl.textContent = 'Opening WhatsApp signup…';
+          FB.login(
+            (response) => {
+              if (!response.authResponse || !response.authResponse.code) {
+                statusEl.textContent = 'Signup was cancelled or did not return a code.';
+                return;
+              }
+              statusEl.textContent = 'Finishing setup on the server…';
+              fetch('/connect/callback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+                body: JSON.stringify({
+                  code: response.authResponse.code,
+                  wabaId: sessionInfo.waba_id,
+                  phoneNumberId: sessionInfo.phone_number_id,
+                }),
+              })
+                .then((r) => r.json())
+                .then((result) => {
+                  statusEl.textContent = result.error
+                    ? 'Failed: ' + result.error
+                    : 'Connected:\n' + JSON.stringify(result.connected, null, 2);
+                })
+                .catch((err) => {
+                  statusEl.textContent = 'Request failed: ' + err.message;
+                });
+            },
+            {
+              config_id: cfg.configId,
+              response_type: 'code',
+              override_default_response_type: true,
+              extras: { setup: {}, featureType: '', sessionInfoVersion: '3' },
+            },
+          );
+        });
+      });
+
+    // Meta posts WABA/phone-number ids to the opener window during signup.
+    window.addEventListener('message', (event) => {
+      if (!event.origin || !event.origin.endsWith('facebook.com')) return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'WA_EMBEDDED_SIGNUP' && data.data) {
+          sessionInfo = data.data;
+        }
+      } catch (_) {
+        /* not a message we care about */
+      }
+    });
+  </script>
+</body>
+</html>

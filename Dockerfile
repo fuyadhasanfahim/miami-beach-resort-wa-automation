@@ -8,6 +8,7 @@ RUN npm ci --omit=dev
 COPY server.js ./
 COPY src ./src
 COPY assets ./assets
+COPY public ./public
 
 ENV NODE_ENV=production
 EXPOSE 3000
