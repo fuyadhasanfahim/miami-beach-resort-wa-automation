@@ -1,8 +1,10 @@
-node_modules/
+node_modules
 .env
-logs/
+.env.example
+.git
+.gitignore
+logs
 *.log
-
 numbers/*/replied.json
 numbers/*/replied.json.tmp
 numbers/*/progress.json

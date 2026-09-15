@@ -2,61 +2,77 @@
 
 const fs = require('fs');
 const path = require('path');
-const { MessageMedia } = require('whatsapp-web.js');
 const { withTimeout } = require('./withTimeout');
 const { randInt } = require('./rand');
 
+const ASSETS_DIR = path.join(__dirname, '..', 'assets');
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const PERMANENT_RE =
-  /(invalid wid|not registered|not-registered|number is not|no such|not a valid|unable to send|wid error|not-authorized|forbidden|blocked)/i;
-
-function isPermanentError(err) {
-  const msg = (err && err.message ? err.message : String(err)).toLowerCase();
-  return PERMANENT_RE.test(msg);
+function readAssetText(relPath) {
+  return fs.readFileSync(path.join(ASSETS_DIR, relPath), 'utf8').trim();
 }
 
-function createReplyPlan({ config, resolveAsset, log }) {
+// Media is sent by public https link (served from this server's /assets route)
+// rather than pre-uploaded to Meta, so the same static files work for both
+// numbers with no media-id bookkeeping.
+function createReplyPlan({ publicBaseUrl, log }) {
   const actions = [];
 
-  const text = (config.reply_text || '').trim();
-  if (text) {
+  let text = '';
+  try {
+    text = readAssetText('message.txt');
+  } catch (_) {}
+  if (text) actions.push({ label: 'text message', heavy: false, kind: 'text', payload: text });
+
+  let link = '';
+  try {
+    link = readAssetText('link.txt');
+  } catch (_) {}
+  if (link) actions.push({ label: 'link', heavy: false, kind: 'text', payload: link });
+
+  let images = [];
+  try {
+    images = fs
+      .readdirSync(path.join(ASSETS_DIR, 'images'))
+      .filter((f) => /\.(jpe?g|png|webp)$/i.test(f))
+      .sort();
+  } catch (_) {}
+  for (const img of images) {
     actions.push({
-      label: 'text message',
+      label: `image ${img}`,
       heavy: false,
-      run: (t) => t.sendMessage(text, { linkPreview: false }),
+      kind: 'image',
+      payload: `${publicBaseUrl}/assets/images/${img}`,
     });
   }
 
-  const link = (config.reply_link || '').trim();
-  if (link) {
-    actions.push({
-      label: 'link',
-      heavy: false,
-      run: (t) => t.sendMessage(link, { linkPreview: false }),
-    });
+  if (fs.existsSync(path.join(ASSETS_DIR, 'video.mp4'))) {
+    actions.push({ label: 'video', heavy: true, kind: 'video', payload: `${publicBaseUrl}/assets/video.mp4` });
+  }
+  if (fs.existsSync(path.join(ASSETS_DIR, 'voice.ogg'))) {
+    actions.push({ label: 'audio', heavy: true, kind: 'audio', payload: `${publicBaseUrl}/assets/voice.ogg` });
   }
 
-  const media = [];
-  for (const rel of config.images || []) media.push({ kind: 'image', abs: resolveAsset(rel) });
-  if (config.video_path) media.push({ kind: 'video', abs: resolveAsset(config.video_path) });
-  if (config.audio_path) media.push({ kind: 'audio', abs: resolveAsset(config.audio_path) });
-
-  for (const m of media) {
-    if (!fs.existsSync(m.abs)) {
-      log(`asset missing, skipped: ${m.abs}`);
-      continue;
-    }
-    const payload = MessageMedia.fromFilePath(m.abs);
-    const options = m.kind === 'audio' ? { sendAudioAsVoice: true } : undefined;
-    actions.push({
-      label: `${m.kind} ${path.basename(m.abs)}`,
-      heavy: m.kind === 'video' || m.kind === 'audio',
-      run: (t) => t.sendMessage(payload, options),
-    });
+  if (actions.length === 0 && typeof log === 'function') {
+    log('No reply actions configured (no text, link, or media found under assets/).');
   }
 
   return { actions, count: actions.length };
+}
+
+function sendAction(graph, to, action) {
+  switch (action.kind) {
+    case 'text':
+      return graph.sendText(to, action.payload);
+    case 'image':
+      return graph.sendImageLink(to, action.payload);
+    case 'video':
+      return graph.sendVideoLink(to, action.payload);
+    case 'audio':
+      return graph.sendAudioLink(to, action.payload);
+    default:
+      throw new Error(`Unknown action kind: ${action.kind}`);
+  }
 }
 
 async function withRetry(fn, { attempts, baseMs, timeoutMs, label, log }) {
@@ -67,8 +83,7 @@ async function withRetry(fn, { attempts, baseMs, timeoutMs, label, log }) {
     } catch (err) {
       lastErr = err;
       const msg = err && err.message ? err.message : String(err);
-      if (isPermanentError(err)) {
-        err.permanent = true;
+      if (err && err.permanent) {
         log(`giving up ${label} (permanent: ${msg})`);
         throw err;
       }
@@ -84,7 +99,7 @@ async function withRetry(fn, { attempts, baseMs, timeoutMs, label, log }) {
   throw lastErr;
 }
 
-async function runReplySequence({ plan, target, settings, startIndex = 0, onProgress, log }) {
+async function runReplySequence({ plan, graph, to, settings, startIndex = 0, onProgress, log }) {
   const { actions } = plan;
   const begin = Math.max(0, Math.min(startIndex, actions.length));
 
@@ -102,7 +117,7 @@ async function runReplySequence({ plan, target, settings, startIndex = 0, onProg
       await wait(randInt(settings.heavyMediaMinMs, settings.heavyMediaMaxMs));
     }
 
-    await withRetry(() => action.run(target), {
+    await withRetry(() => sendAction(graph, to, action), {
       attempts: settings.sendRetryAttempts,
       baseMs: settings.sendRetryBaseMs,
       timeoutMs: settings.actionTimeoutMs,
@@ -114,4 +129,4 @@ async function runReplySequence({ plan, target, settings, startIndex = 0, onProg
   }
 }
 
-module.exports = { createReplyPlan, runReplySequence, isPermanentError };
+module.exports = { createReplyPlan, runReplySequence };
